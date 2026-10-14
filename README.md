@@ -31,8 +31,22 @@ refusal_degeneracy/
   eval.py          functional checks that interventions remove the targeted structure
   runs.py          JSONL run persistence
 tests/             CPU unit tests + functional evals (random tiny model)
-notebooks/         step-by-step reproduction (weeks 1-2)
+scripts/           end-to-end pipelines driven by a config
+configs/           example experiment configs
 ```
+
+## Reproduce
+
+Weeks 1-2 reproduce the refusal direction and the single-neuron attack, then evaluate both
+against the held-out test sets:
+
+```bash
+python scripts/run_week1.py --config configs/qwen3-1.7b.json
+python scripts/run_week1.py --model Qwen/Qwen3-1.7B --limit 40 --logits-only  # fast check
+```
+
+Outputs (splits, directions, layer and neuron sweeps, per-set refusal rates, and the run
+JSONL) are written under `RD_RESULTS` (default `results/`).
 
 ## Method
 
