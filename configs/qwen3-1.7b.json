@@ -1,0 +1,28 @@
+{
+  "model": "Qwen/Qwen3-1.7B",
+  "refusal_words": [
+    "I",
+    "As"
+  ],
+  "max_new_tokens": 512,
+  "gen_batch_size": 16,
+  "cache_batch_size": 16,
+  "attribution_batch_size": 4,
+  "neuron_top_k": 5,
+  "neuron_magnitudes": [
+    0,
+    2,
+    5,
+    10,
+    20,
+    50,
+    100
+  ],
+  "layer_kl_max": 0.1,
+  "neuron_kl_max": 0.5,
+  "split": {
+    "seed": 0,
+    "n_find": 128,
+    "n_val_harmless": 100
+  }
+}
