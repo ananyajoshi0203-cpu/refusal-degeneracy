@@ -54,6 +54,15 @@ def diff_in_means(resid_harmful: Tensor, resid_harmless: Tensor) -> Tensor:
     return resid_harmful.mean(0) - resid_harmless.mean(0)
 
 
+def candidate_layers(directions: Tensor, skip_last_frac: float = 0.2, min_norm: float = 1e-6) -> list[int]:
+    """Layers eligible for selection: outside the final ``skip_last_frac`` and with a direction to
+    normalize. A layer whose inputs are identical for every prompt (layer 0 at the last token,
+    which is always the same chat-template token) has a zero direction and would ablate as NaN."""
+    n_eligible = int(directions.shape[0] * (1 - skip_last_frac))
+    norms = directions[:n_eligible].float().norm(dim=-1)
+    return [layer for layer in range(n_eligible) if norms[layer] > min_norm]
+
+
 def select_layer(
     model,
     tokenizer,
@@ -67,11 +76,10 @@ def select_layer(
     progress: bool = True,
 ) -> tuple[int, pd.DataFrame]:
     """Pick the layer whose direction most reduces refusal while keeping harmless output stable."""
-    n_layers = directions.shape[0]
     vh, vb = val_harmful[:n], val_harmless[:n]
     base = last_logits(model, tokenizer, vb)
     rows = []
-    candidates = range(int(n_layers * (1 - skip_last_frac)))
+    candidates = candidate_layers(directions, skip_last_frac)
     if progress:
         from tqdm.auto import tqdm
 
