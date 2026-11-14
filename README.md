@@ -47,7 +47,8 @@ python scripts/run_week1.py --model Qwen/Qwen3-1.7B --limit 40 --logits-only  # 
 ```
 
 Outputs (splits, directions, layer and neuron sweeps, per-set refusal rates, and the run
-JSONL) are written under `RD_RESULTS` (default `results/`).
+JSONL) are written under `RD_RESULTS` (default `results/`). Each stage is saved as soon as it
+finishes; rerun with `--resume` and the same `--out` to skip finished stages and reply files.
 
 ## Method
 
