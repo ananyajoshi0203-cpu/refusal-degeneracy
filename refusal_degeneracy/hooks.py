@@ -119,3 +119,29 @@ def neuron_zero(model, neurons: Iterable[tuple[int, int]]) -> tuple[list[HookPai
 
         pre_hooks.append((model.model.layers[layer].mlp.down_proj, pre))
     return pre_hooks, []
+
+
+def neuron_write_ablation(
+    model, neurons: Iterable[tuple[int, int]], direction: Tensor | None = None
+) -> tuple[list[HookPair], list[HookPair]]:
+    """Subtract the residual writes of ``neurons``: all of each write when ``direction`` is None,
+    otherwise only its component along ``direction``, leaving the rest of every write intact."""
+    by_layer: dict[int, list[int]] = {}
+    for layer, index in neurons:
+        by_layer.setdefault(layer, []).append(index)
+    unit = None if direction is None else direction.float() / direction.float().norm()
+
+    post_hooks = []
+    for layer, indices in by_layer.items():
+        index_tensor = torch.tensor(indices)
+
+        def post(module, inp, out, index_tensor=index_tensor):
+            index = index_tensor.to(out.device)
+            writes = inp[0][..., index] @ module.weight[:, index].T
+            if unit is not None:
+                r = unit.to(device=out.device, dtype=out.dtype)
+                writes = (writes @ r).unsqueeze(-1) * r
+            return out - writes
+
+        post_hooks.append((model.model.layers[layer].mlp.down_proj, post))
+    return [], post_hooks
