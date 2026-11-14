@@ -42,6 +42,7 @@ against the held-out test sets:
 
 ```bash
 python scripts/run_week1.py --config configs/qwen3-1.7b.json
+python scripts/run_week1.py --config configs/qwen2.5-7b.json   # A100; matches DSA Table V
 python scripts/run_week1.py --model Qwen/Qwen3-1.7B --limit 40 --logits-only  # fast check
 ```
 
