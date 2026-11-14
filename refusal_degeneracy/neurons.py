@@ -1,7 +1,8 @@
 """Rank MLP neurons by gradient-times-activation and select the refusal neuron."""
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 import pandas as pd
 import torch
@@ -12,29 +13,57 @@ from .hooks import hooks, neuron_pin
 from .model import batches, decoder_layers, encode
 
 
+@dataclass(frozen=True)
+class LastTokenGrads:
+    """Per-layer quantities at the last prompt token, each a list over layers."""
+
+    acts: list[Tensor]
+    act_grads: list[Tensor]
+    out_grads: list[Tensor]
+
+
+def last_token_grads(model, inputs: Mapping[str, Tensor], ref_ids: Sequence[int]) -> LastTokenGrads:
+    """Backpropagate the summed refusal score of one batch to every MLP neuron (``acts`` and
+    ``act_grads``, ``[n, d_mlp]``) and to every MLP residual write (``out_grads``, ``[n, d_model]``)."""
+    layers = decoder_layers(model)
+    acts: dict[int, Tensor] = {}
+    outs: dict[int, Tensor] = {}
+
+    def keep_act(i):
+        def pre(module, args, kwargs):
+            args[0].retain_grad()
+            acts[i] = args[0]
+
+        return pre
+
+    def keep_out(i):
+        def post(module, inp, out):
+            out.retain_grad()
+            outs[i] = out
+
+        return post
+
+    emb = model.get_input_embeddings()(inputs["input_ids"]).detach().requires_grad_(True)
+    with torch.enable_grad(), hooks(
+        pre=[(layer.mlp.down_proj, keep_act(i)) for i, layer in enumerate(layers)],
+        post=[(layer.mlp.down_proj, keep_out(i)) for i, layer in enumerate(layers)],
+    ):
+        logits = model(inputs_embeds=emb, attention_mask=inputs.get("attention_mask")).logits[:, -1, :]
+        refusal_score_from_logits(logits.float(), ref_ids).sum().backward()
+    order = range(len(layers))
+    return LastTokenGrads(
+        acts=[acts[i][:, -1].detach().float() for i in order],
+        act_grads=[acts[i].grad[:, -1].float() for i in order],
+        out_grads=[outs[i].grad[:, -1].float() for i in order],
+    )
+
+
 def _attribution(model, tokenizer, prompts, ref_ids, batch_size, progress) -> Tensor:
-    n_layers = len(decoder_layers(model))
     total, count = None, 0
     for batch in batches(prompts, batch_size, progress, "attribution"):
-        enc = encode(tokenizer, batch, model.device)
-        saved: dict[int, Tensor] = {}
-
-        def keep(i, saved=saved):
-            def pre(module, args, kwargs):
-                args[0].retain_grad()
-                saved[i] = args[0]
-
-            return pre
-
-        emb = model.get_input_embeddings()(enc["input_ids"]).detach().requires_grad_(True)
-        with torch.enable_grad(), hooks(
-            pre=[(decoder_layers(model)[i].mlp.down_proj, keep(i)) for i in range(n_layers)]
-        ):
-            logits = model(inputs_embeds=emb, attention_mask=enc["attention_mask"]).logits[:, -1, :].float()
-            refusal_score_from_logits(logits, ref_ids).sum().backward()
-        attribution = torch.stack(
-            [(saved[i][:, -1] * saved[i].grad[:, -1]).float().sum(0) for i in range(n_layers)]
-        ).cpu()
+        grads = last_token_grads(model, encode(tokenizer, batch, model.device), ref_ids)
+        per_layer = zip(grads.acts, grads.act_grads, strict=True)
+        attribution = torch.stack([(act * act_grad).sum(0) for act, act_grad in per_layer]).cpu()
         total = attribution if total is None else total + attribution
         count += len(batch)
     return total / count
