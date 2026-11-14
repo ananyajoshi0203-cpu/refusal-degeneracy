@@ -3,13 +3,22 @@ import math
 import pytest
 import torch
 
+from refusal_degeneracy.eval import last_token_residuals
 from refusal_degeneracy.geometry import (
     RoutedAttribution,
     direction_cosines,
     neuron_writes,
     participation_ratio,
     routed_attribution_batch,
+    set_geometry,
     summarize,
+)
+from refusal_degeneracy.synthetic import (
+    SyntheticDefense,
+    implant_defense,
+    refusal_gap,
+    toy_model,
+    toy_prompts,
 )
 
 REFUSAL_IDS = [3, 4]
@@ -63,3 +72,30 @@ def test_summarize_reports_the_share_of_top_attribution_through_the_direction(ti
     assert [(n.layer, n.index) for n in summary.neurons] == top
     assert summary.direction_share == pytest.approx(share)
     assert summary.neurons[0].cosine == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(
+    ("degeneracy", "runs_through_direction"), [(0.0, True), (1.0, False)], ids=["redundant", "degenerate"]
+)
+def test_set_geometry_of_implanted_neurons_reflects_their_redundancy(degeneracy, runs_through_direction):
+    model = toy_model(seed=0)
+    *harmful, harmless = toy_prompts(model, 0, [1, 2, 9, 10])
+    ref_ids = [3, 4, 5]
+    defense = SyntheticDefense(layer=2, neurons_per_category=2, degeneracy=degeneracy, write_gain=1.0)
+    defended = implant_defense(model, defense, harmful, harmless, ref_ids)
+    harmful_ids = torch.cat(harmful)
+    direction = (
+        last_token_residuals(defended, harmful_ids, None)[:, -1].mean(0)
+        - last_token_residuals(defended, harmless, None)[:, -1].mean(0)
+    )
+    implanted = [index for category in range(len(harmful)) for index in defense.neurons(category)]
+    scores = torch.zeros(4, 64)
+    scores[defense.layer, implanted] = 1.0
+
+    geometry = set_geometry(
+        lambda hook_spec: refusal_gap(defended, harmful_ids, harmless, ref_ids, hook_spec),
+        defended, scores, direction, k=len(implanted),
+    )
+
+    assert (geometry.counterfactual_share > 0.8) == runs_through_direction
+    assert (geometry.weighted_cos2 > 0.9) == runs_through_direction
