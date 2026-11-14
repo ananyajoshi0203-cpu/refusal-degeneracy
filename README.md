@@ -28,6 +28,7 @@ refusal_degeneracy/
   neurons.py       gradient x activation neuron scoring and selection
   judge.py         refusal-substring and Llama-Guard-3 judging
   data.py          leak-free Find / Validate / Test splits
+  geometry.py      safety-neuron write geometry: how much refusal runs through one direction
   eval.py          functional checks that interventions remove the targeted structure
   runs.py          JSONL run persistence
 tests/             CPU unit tests + functional evals (random tiny model)
