@@ -72,7 +72,7 @@ Check that the geometry measures predict direction-ablation survival on controll
 python scripts/run_synthetic.py --out results/synthetic
 ```
 
-Train a DSA-defended copy of the model (one A100 80GB, about an hour for Qwen2.5-7B), then
+Train a DSA-defended copy of the model (Qwen2.5-7B needs one 80GB GPU: FFN weights, gradients and AdamW state in bf16), then
 attack it with the same pipeline:
 
 ```bash
