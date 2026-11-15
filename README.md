@@ -72,6 +72,16 @@ Check that the geometry measures predict direction-ablation survival on controll
 python scripts/run_synthetic.py --out results/synthetic
 ```
 
+Train a DSA-defended copy of the model (Qwen2.5-7B needs one 80GB GPU: FFN weights, gradients and AdamW state in bf16), then
+attack it with the same pipeline:
+
+```bash
+python scripts/run_dsa.py --model Qwen/Qwen2.5-7B-Instruct --out results/qwen2.5-7b-dsa \
+    --splits results/qwen2.5-7b/splits.json
+python scripts/run_week1.py --config configs/qwen2.5-7b.json --model results/qwen2.5-7b-dsa/model \
+    --out results/qwen2.5-7b-dsa
+```
+
 ## Method
 
 Attacks and defenses are evaluated at matched granularities, following Arditi et al. (2024),
