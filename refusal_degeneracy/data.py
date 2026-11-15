@@ -179,3 +179,32 @@ def load_natural_reasoning(n: int, seed: int) -> list[tuple[str, str]]:
         if len(pairs) == n:
             break
     return pairs
+
+
+def load_beavertails_prompts(blocked: Sequence[str]) -> tuple[list[str], list[str]]:
+    """(harmful, benign) BeaverTails 30k prompts, NeuronGuard's probe and safety data.
+    BeaverTails labels each (prompt, response) pair, so a prompt is harmful when every response
+    to it is unsafe and benign when every one is safe; mixed prompts are dropped."""
+    from datasets import load_dataset
+
+    labels: dict[str, set[bool]] = {}
+    for row in load_dataset("PKU-Alignment/BeaverTails", split="30k_train"):
+        labels.setdefault(row["prompt"].strip(), set()).add(row["is_safe"])
+    harmful, _ = remove_overlap(dedupe([p for p, safe in labels.items() if safe == {False}]), blocked)
+    benign = dedupe([p for p, safe in labels.items() if safe == {True}])
+    return harmful, benign
+
+
+SST2_LABELS = ("negative", "positive")
+SST2_INSTRUCTION = "Classify the sentiment of this sentence as positive or negative."
+
+
+def load_sst2(n: int, seed: int) -> list[tuple[str, str]]:
+    """``n`` SST2 training sentences as (instruction, answer) pairs, NeuronGuard's user task."""
+    from datasets import load_dataset
+
+    rows = load_dataset("stanfordnlp/sst2", split="train").shuffle(seed=seed).select(range(n))
+    return [
+        (f"{SST2_INSTRUCTION}\n\n{row['sentence'].strip()}", SST2_LABELS[row["label"]])
+        for row in rows
+    ]

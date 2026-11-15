@@ -82,6 +82,14 @@ python scripts/run_week1.py --config configs/qwen2.5-7b.json --model results/qwe
     --out results/qwen2.5-7b-dsa
 ```
 
+NeuronGuard is a defense applied during user fine-tuning, so its model is Qwen2.5-7B fine-tuned
+on SST2 with NeuronGuard active, attacked the same way:
+
+```bash
+python scripts/run_neuronguard.py --model Qwen/Qwen2.5-7B-Instruct \
+    --out results/qwen2.5-7b-neuronguard --splits results/qwen2.5-7b/splits.json
+```
+
 ## Method
 
 Attacks and defenses are evaluated at matched granularities, following Arditi et al. (2024),
