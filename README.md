@@ -52,6 +52,13 @@ Outputs (splits, directions, layer and neuron sweeps, per-set refusal rates, and
 JSONL) are written under `RD_RESULTS` (default `results/`). Each stage is saved as soon as it
 finishes; rerun with `--resume` and the same `--out` to skip finished stages and reply files.
 
+Then measure the safety neurons' write geometry against direction-ablation survival on the
+validation prompts of a finished run:
+
+```bash
+python scripts/run_geometry.py --run results/qwen2.5-7b
+```
+
 Check that the geometry measures predict direction-ablation survival on controlled defenses
 (CPU, a few seconds):
 

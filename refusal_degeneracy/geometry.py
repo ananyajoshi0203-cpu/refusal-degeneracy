@@ -47,6 +47,16 @@ class GeometrySummary:
     participation_ratio: float
 
 
+@dataclass(frozen=True)
+class SetGeometry:
+    """Geometry of one set of safety neurons, the ``k`` most attributed."""
+
+    k: int
+    counterfactual_share: float
+    weighted_cos2: float
+    participation_ratio: float
+
+
 def unit(vector: Tensor) -> Tensor:
     return vector.float() / vector.float().norm()
 
@@ -150,3 +160,24 @@ def counterfactual_direction_share(
     removed_entirely = gap - refusal_gap(neuron_write_ablation(model, neurons))
     removed_along_direction = gap - refusal_gap(neuron_write_ablation(model, neurons, direction))
     return removed_along_direction / removed_entirely
+
+
+def set_geometry(
+    refusal_gap: Callable[[tuple | None], float],
+    model,
+    scores: Tensor,
+    direction: Tensor,
+    k: int,
+) -> SetGeometry:
+    """Weight and counterfactual geometry of the ``k`` neurons with the highest ``scores``."""
+    neurons = top_neurons(scores, k)
+    writes = neuron_writes(model, neurons)
+    weights = torch.tensor([float(scores[layer, index]) for layer, index in neurons]).clamp(min=0)
+    cosines = direction_cosines(writes, direction)
+    unit_writes = writes / writes.norm(dim=-1, keepdim=True)
+    return SetGeometry(
+        k=k,
+        counterfactual_share=counterfactual_direction_share(refusal_gap, model, neurons, direction),
+        weighted_cos2=float((weights * cosines**2).sum() / weights.sum()),
+        participation_ratio=participation_ratio(weights[:, None] * unit_writes),
+    )
