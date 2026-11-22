@@ -20,6 +20,7 @@ def test_parser_defaults(script):
     assert args.config is None
     assert args.limit is None
     assert args.logits_only is False
+    assert args.resume is False
 
 
 def test_config_from_args_uses_defaults(script):
@@ -46,3 +47,17 @@ def test_config_from_args_reads_file(script, tmp_path):
     replace(ExperimentConfig(), model="my/model").to_json(path)
     args = script.build_parser().parse_args(["--config", str(path)])
     assert script.config_from_args(args).model == "my/model"
+
+
+@pytest.mark.parametrize(("saved_model", "resumable"), [("my/model", True), ("other/model", False)])
+def test_resume_refuses_results_from_a_different_config(script, tmp_path, saved_model, resumable):
+    from refusal_degeneracy.config import ExperimentConfig
+
+    config = replace(ExperimentConfig(), model="my/model")
+    replace(config, model=saved_model).to_json(tmp_path / "config.json")
+
+    if resumable:
+        script.check_resumable(tmp_path, config)
+    else:
+        with pytest.raises(SystemExit):
+            script.check_resumable(tmp_path, config)
