@@ -29,6 +29,7 @@ refusal_degeneracy/
   judge.py         refusal-substring and Llama-Guard-3 judging
   data.py          leak-free Find / Validate / Test splits
   geometry.py      safety-neuron write geometry: how much refusal runs through one direction
+  synthetic.py     controlled redundant-vs-degenerate defenses implanted into a toy model
   eval.py          functional checks that interventions remove the targeted structure
   runs.py          JSONL run persistence
 tests/             CPU unit tests + functional evals (random tiny model)
@@ -50,6 +51,13 @@ python scripts/run_week1.py --model Qwen/Qwen3-1.7B --limit 40 --logits-only  # 
 Outputs (splits, directions, layer and neuron sweeps, per-set refusal rates, and the run
 JSONL) are written under `RD_RESULTS` (default `results/`). Each stage is saved as soon as it
 finishes; rerun with `--resume` and the same `--out` to skip finished stages and reply files.
+
+Check that the geometry measures predict direction-ablation survival on controlled defenses
+(CPU, a few seconds):
+
+```bash
+python scripts/run_synthetic.py --out results/synthetic
+```
 
 ## Method
 

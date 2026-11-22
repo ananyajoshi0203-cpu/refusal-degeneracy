@@ -8,12 +8,13 @@ the two a model is, to first order, before running the attack.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 import torch
 from torch import Tensor
 
+from .hooks import neuron_write_ablation
 from .model import batches, decoder_layers, encode
 from .neurons import last_token_grads, top_neurons
 
@@ -130,3 +131,22 @@ def summarize(model, routed: RoutedAttribution, direction: Tensor, k: int) -> Ge
         weighted_cos2=float((weights * cosines**2).sum() / weights.sum()),
         participation_ratio=participation_ratio(weighted_unit_writes),
     )
+
+
+def counterfactual_direction_share(
+    refusal_gap: Callable[[tuple | None], float],
+    model,
+    neurons: Sequence[tuple[int, int]],
+    direction: Tensor,
+) -> float:
+    """Share of the ``neurons``' joint effect on the harmful-vs-harmless refusal gap that runs
+    through ``direction``: the gap lost by removing only the direction's part of their writes,
+    over the gap lost by removing their writes entirely.
+
+    Unlike the gradient ``direction_share`` this needs no linearization, so it stays right when a
+    strong write saturates the final norm (where gradient x activation can even flip sign) and
+    when the neurons' writes interact. ``refusal_gap`` maps an optional hook spec to the gap."""
+    gap = refusal_gap(None)
+    removed_entirely = gap - refusal_gap(neuron_write_ablation(model, neurons))
+    removed_along_direction = gap - refusal_gap(neuron_write_ablation(model, neurons, direction))
+    return removed_along_direction / removed_entirely

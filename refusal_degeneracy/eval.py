@@ -13,7 +13,7 @@ from .hooks import direction_ablation, hooks, neuron_pin
 from .model import decoder_layers
 
 
-def _last_token_residuals(model, input_ids: Tensor, attention_mask: Tensor | None, hook_spec=None) -> Tensor:
+def last_token_residuals(model, input_ids: Tensor, attention_mask: Tensor | None, hook_spec=None) -> Tensor:
     store: dict[int, Tensor] = {}
     n_layers = len(decoder_layers(model))
 
@@ -41,14 +41,14 @@ def measure_direction_removal(
 ) -> dict[str, float]:
     """Cache residuals, build the diff-in-means direction at the strongest layer, and report the
     mean |component| along it before and after ablation. ``after`` should be ~0."""
-    harmful = _last_token_residuals(model, harmful_ids, attention_mask)
-    harmless = _last_token_residuals(model, harmless_ids, attention_mask)
+    harmful = last_token_residuals(model, harmful_ids, attention_mask)
+    harmless = last_token_residuals(model, harmless_ids, attention_mask)
     directions = harmful.mean(0) - harmless.mean(0)
     layer = int(directions.norm(dim=-1).argmax())
     direction = directions[layer]
 
     before = mean_alignment(harmful[:, layer], direction)
-    ablated = _last_token_residuals(model, harmful_ids, attention_mask, direction_ablation(model, direction))
+    ablated = last_token_residuals(model, harmful_ids, attention_mask, direction_ablation(model, direction))
     after = mean_alignment(ablated[:, layer], direction)
     return {"layer": layer, "alignment_before": before, "alignment_after": after}
 
