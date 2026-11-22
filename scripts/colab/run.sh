@@ -1,6 +1,6 @@
 #!/bin/bash
 # Runs on the Colab VM, detached. Usage: run.sh <config> <results root> <stage>...
-# Stages, run in order: base (weeks 1-2 + geometry on the undefended model), dsa, neuronguard
+# Stages, run in order: base (weeks 1-2, geometry and cluster ablation on the undefended model), dsa, neuronguard
 # (train the defense, then weeks 1-2 + geometry on it). Results land in <root>/<run>[-<defense>]
 # on Drive; defended weights stay on the VM disk. Progress in <root>/run.log, exit code in
 # <root>/exit_code once every stage has finished. REPO, WORK and DEFENSE_ARGS (extra flags for
@@ -19,7 +19,8 @@ rm -f "$root/exit_code"
 
 attack() {  # attack <model> <results dir>
   python scripts/run_week1.py --config "$config" --model "$1" --out "$2" --resume &&
-  python scripts/run_geometry.py --run "$2"
+  python scripts/run_geometry.py --run "$2" &&
+  python scripts/run_conditional.py --run "$2" --resume
 }
 
 defend() {  # defend <defense>

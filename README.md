@@ -65,6 +65,13 @@ validation prompts of a finished run:
 python scripts/run_geometry.py --run results/qwen2.5-7b
 ```
 
+Attack the same run with cluster-conditional direction ablation (one direction per k-means cluster
+of harmful activations, as in Piras et al. 2025), next to a random-direction control:
+
+```bash
+python scripts/run_conditional.py --run results/qwen2.5-7b
+```
+
 Check that the geometry measures predict direction-ablation survival on controlled defenses
 (CPU, a few seconds):
 
