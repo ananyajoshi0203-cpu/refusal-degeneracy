@@ -143,3 +143,39 @@ def get_splits(config: SplitConfig | None = None) -> Splits:
     splits, report = build_splits(config)
     save_splits(splits, report, path)
     return splits
+
+
+DSA_HARMFUL_SOURCES = (
+    ("declare-lab/CategoricalHarmfulQA", None, "en", "Question"),
+    ("declare-lab/HarmfulQA", None, "train", "question"),
+    ("LLM-LAT/harmful-dataset", None, "train", "prompt"),
+)
+
+
+def load_dsa_harmful_pool(blocked: Sequence[str]) -> list[str]:
+    """DSA's harmful training pool (CatHarmfulQA, HarmfulQA, LLM-LAT; 7,458 rows before
+    dedupe against the paper's 7,427), with every prompt near a test or validation prompt
+    removed so the defense never trains on what it is scored on."""
+    from datasets import load_dataset
+
+    pool: list[str] = []
+    for name, config, split, column in DSA_HARMFUL_SOURCES:
+        rows = load_dataset(name, config, split=split)
+        pool += [text.strip() for text in rows[column] if text and text.strip()]
+    kept, _ = remove_overlap(dedupe(pool), blocked)
+    return kept
+
+
+def load_natural_reasoning(n: int, seed: int) -> list[tuple[str, str]]:
+    """``n`` (question, answer) pairs from NaturalReasoning, DSA's general-utility data, taking
+    the first listed model response as the answer."""
+    from datasets import load_dataset
+
+    stream = load_dataset("facebook/natural_reasoning", split="train", streaming=True)
+    pairs: list[tuple[str, str]] = []
+    for row in stream.shuffle(seed=seed, buffer_size=10 * n):
+        if row["responses"] and row["responses"][0]["response"].strip():
+            pairs.append((row["question"].strip(), row["responses"][0]["response"].strip()))
+        if len(pairs) == n:
+            break
+    return pairs
