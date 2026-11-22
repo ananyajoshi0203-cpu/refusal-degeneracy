@@ -5,6 +5,7 @@ import torch
 
 from refusal_degeneracy.directions import (
     candidate_layers,
+    conditional_directions,
     diff_in_means,
     kl_div,
     refusal_score_from_logits,
@@ -54,3 +55,25 @@ def test_candidate_layers_skip_zero_directions_and_the_last_fifth(zero_layers, e
     candidates = candidate_layers(directions, skip_last_frac=0.2)
 
     assert candidates == expected
+
+
+@pytest.mark.parametrize("n_clusters", [2, 3, 5])
+def test_conditional_directions_are_the_global_direction_then_one_per_cluster(n_clusters):
+    # Arrange
+    generator = torch.Generator().manual_seed(n_clusters)
+    width, per_cluster = 16, 20
+    centers = torch.randn(n_clusters, width, generator=generator) * 10
+    harmless = torch.randn(30, width, generator=generator)
+    expected_per_cluster = centers - harmless.mean(0)
+    harmful = (
+        centers[:, None] + 0.01 * torch.randn(n_clusters, per_cluster, width, generator=generator)
+    ).flatten(0, 1)
+
+    # Act
+    directions = conditional_directions(harmful, harmless, n_clusters)
+
+    # Assert
+    assert torch.allclose(directions[0], harmful.mean(0) - harmless.mean(0), atol=1e-4)
+    distance = torch.cdist(directions[1:], expected_per_cluster)
+    assert sorted(distance.argmin(1).tolist()) == list(range(n_clusters))
+    assert distance.min(1).values.max() < 0.05

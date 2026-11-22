@@ -87,7 +87,7 @@ def test_removing_writes_along_a_direction_changes_the_mlp_output_only_along_it(
 @pytest.mark.parametrize(
     ("degeneracy", "survives_ablation"), [(0.0, False), (1.0, True)], ids=["redundant", "degenerate"]
 )
-def test_only_the_degenerate_defense_survives_ablation_and_its_share_says_so(
+def test_only_the_degenerate_defense_survives_one_direction_and_neither_survives_its_clusters(
     script, degeneracy, survives_ablation
 ):
     model = toy_model(seed=0)
@@ -99,6 +99,8 @@ def test_only_the_degenerate_defense_survives_ablation_and_its_share_says_so(
     assert outcome.refusal_gap > script.MIN_REFUSAL_GAP
     assert (outcome.retained_refusal > 0.25) == survives_ablation
     assert (outcome.counterfactual_share < 0.5) == survives_ablation
+    assert (outcome.retained_random_control > 0.25) == survives_ablation
+    assert outcome.retained_conditional < 0.25
 
 
 def test_counterfactual_share_ranks_defenses_by_how_much_refusal_survives(script):

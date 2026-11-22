@@ -103,3 +103,31 @@ def select_layer(
     ok = df[(df.add_score > 0) & (df.kl < kl_max)]
     best = (ok if len(ok) else df).sort_values("ablate_score").iloc[0]
     return int(best.layer), df
+
+
+def kmeans(points: Tensor, k: int, seed: int, iters: int = 50) -> Tensor:
+    """Cluster labels ``[n]`` for ``points [n, d]``; Lloyd's algorithm from k-means++ seeds."""
+    generator = torch.Generator().manual_seed(seed)
+    points = points.float()
+    centers = points[torch.randint(len(points), (1,), generator=generator)]
+    while len(centers) < k:
+        distance = torch.cdist(points, centers).min(1).values ** 2
+        pick = torch.multinomial(distance / distance.sum(), 1, generator=generator)
+        centers = torch.cat([centers, points[pick]])
+    for _ in range(iters):
+        labels = torch.cdist(points, centers).argmin(1)
+        centers = torch.stack(
+            [points[labels == c].mean(0) if (labels == c).any() else centers[c] for c in range(k)]
+        )
+    return torch.cdist(points, centers).argmin(1)
+
+
+def conditional_directions(harmful: Tensor, harmless: Tensor, k: int, seed: int = 0) -> Tensor:
+    """``[k + 1, d]``: the global difference-in-means refusal direction, then one per k-means
+    cluster of the harmful activations, each that cluster's mean minus the harmless mean. A
+    defense that refuses through input-specific directions keeps refusing when only the global
+    one is ablated; ablating their span removes every one of them."""
+    harmless_mean = harmless.float().mean(0)
+    labels = kmeans(harmful, k, seed)
+    per_cluster = [harmful[labels == c].float().mean(0) - harmless_mean for c in labels.unique()]
+    return torch.stack([harmful.float().mean(0) - harmless_mean, *per_cluster])
