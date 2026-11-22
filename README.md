@@ -52,6 +52,12 @@ Outputs (splits, directions, layer and neuron sweeps, per-set refusal rates, and
 JSONL) are written under `RD_RESULTS` (default `results/`). Each stage is saved as soon as it
 finishes; rerun with `--resume` and the same `--out` to skip finished stages and reply files.
 
+Judge every saved reply with Llama-Guard-3-8B (attack success rate, as in DSA Table V):
+
+```bash
+python scripts/judge_runs.py --run results/qwen2.5-7b
+```
+
 Then measure the safety neurons' write geometry against direction-ablation survival on the
 validation prompts of a finished run:
 
