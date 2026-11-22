@@ -34,8 +34,12 @@ def last_logits(model, tokenizer, prompts: Sequence[str], hook_spec=None, batch_
 
 
 def refusal_score_from_logits(logits: Tensor, ref_ids: Sequence[int]) -> Tensor:
-    p = logits.softmax(-1)[:, ref_ids].sum(-1).clamp(1e-8, 1 - 1e-8)
-    return torch.log(p) - torch.log1p(-p)
+    """Log-odds that the next token is a refusal token, computed in logit space: going through
+    probabilities saturates at +inf once a refusal is confident enough to round p to 1.0."""
+    is_refusal = torch.zeros(logits.shape[-1], dtype=torch.bool, device=logits.device)
+    is_refusal[list(ref_ids)] = True
+    logits = logits.float()
+    return logits[:, is_refusal].logsumexp(-1) - logits[:, ~is_refusal].logsumexp(-1)
 
 
 def refusal_score(model, tokenizer, prompts, ref_ids, hook_spec=None, batch_size: int = 16) -> Tensor:
