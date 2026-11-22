@@ -20,10 +20,10 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from .directions import refusal_score_from_logits
+from .directions import conditional_directions, refusal_score_from_logits
 from .eval import last_token_residuals
 from .geometry import counterfactual_direction_share, routed_attribution_batch, summarize, unit
-from .hooks import direction_ablation, hooks
+from .hooks import direction_ablation, hooks, multi_direction_ablation
 from .model import decoder_layers
 
 
@@ -48,6 +48,8 @@ class DefenseOutcome:
     counterfactual_share: float
     refusal_gap: float
     retained_refusal: float
+    retained_conditional: float
+    retained_random_control: float
 
 
 def toy_model(seed: int, unembed_scale: float = 50.0):
@@ -167,14 +169,14 @@ def evaluate_defense(
 ) -> DefenseOutcome:
     """Implant ``defense``, find the refusal direction the usual way (difference in means at the
     last layer's input), then compare the predicted ``direction_share`` with the fraction of the
-    harmful-vs-harmless refusal gap that survives ablating that direction."""
+    harmful-vs-harmless refusal gap that survives ablating that direction, next to what survives
+    ablating the cluster-conditional directions and, as a control, as many random ones."""
     defended = implant_defense(model, defense, harmful_by_category, harmless_ids, ref_ids)
     harmful_ids = torch.cat(list(harmful_by_category))
     last = len(decoder_layers(defended)) - 1
-    direction = (
-        last_token_residuals(defended, harmful_ids, None)[:, last].mean(0)
-        - last_token_residuals(defended, harmless_ids, None)[:, last].mean(0)
-    )
+    harmful_resid = last_token_residuals(defended, harmful_ids, None)[:, last]
+    harmless_resid = last_token_residuals(defended, harmless_ids, None)[:, last]
+    direction = harmful_resid.mean(0) - harmless_resid.mean(0)
     routed = routed_attribution_batch(defended, {"input_ids": harmful_ids}, ref_ids, direction) - (
         routed_attribution_batch(defended, {"input_ids": harmless_ids}, ref_ids, direction)
     )
@@ -188,6 +190,11 @@ def evaluate_defense(
     implanted = [(defense.layer, index) for category in categories for index in defense.neurons(category)]
     gap = gap_under(None)
     ablated_gap = gap_under(direction_ablation(defended, direction))
+    n_categories = len(harmful_by_category)
+    conditional = conditional_directions(harmful_resid, harmless_resid, n_categories)
+    generator = torch.Generator().manual_seed(n_categories)
+    random_directions = torch.randn(n_categories, len(direction), generator=generator)
+    random_control = torch.cat([direction[None], random_directions])
     return DefenseOutcome(
         degeneracy=defense.degeneracy,
         direction_share=geometry.direction_share,
@@ -196,4 +203,6 @@ def evaluate_defense(
         counterfactual_share=counterfactual_direction_share(gap_under, defended, implanted, direction),
         refusal_gap=gap,
         retained_refusal=ablated_gap / gap,
+        retained_conditional=gap_under(multi_direction_ablation(defended, conditional)) / gap,
+        retained_random_control=gap_under(multi_direction_ablation(defended, random_control)) / gap,
     )

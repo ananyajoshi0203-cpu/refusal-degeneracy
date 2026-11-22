@@ -58,6 +58,14 @@ def rank_correlations(results: pd.DataFrame) -> dict[str, float]:
     return {measure: float(working[measure].rank().corr(retained)) for measure in MEASURES}
 
 
+def survival_by_degeneracy(results: pd.DataFrame) -> pd.DataFrame:
+    """Mean refusal retained under each attack, per degeneracy level: the single direction, the
+    cluster-conditional directions, and as many random directions as a control."""
+    working = results[results.refusal_gap > MIN_REFUSAL_GAP]
+    attacks = ["retained_refusal", "retained_conditional", "retained_random_control"]
+    return working.groupby("degeneracy")[attacks].mean()
+
+
 def main() -> None:
     args = build_parser().parse_args()
     results = sweep(args)
@@ -65,7 +73,10 @@ def main() -> None:
     args.out.mkdir(parents=True, exist_ok=True)
     results.to_csv(args.out / "synthetic_sweep.csv", index=False)
     (args.out / "correlations.json").write_text(json.dumps(correlations, indent=2))
+    survival = survival_by_degeneracy(results)
+    survival.to_csv(args.out / "survival_by_degeneracy.csv")
     print(results.round(3).to_string(index=False))
+    print(survival.round(3).to_string())
     print(json.dumps(correlations, indent=2))
 
 
