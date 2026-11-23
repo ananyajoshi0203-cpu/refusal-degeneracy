@@ -105,10 +105,30 @@ nothing survives once k reaches it. With a single refusal token for every harmfu
 refusal is removed at k = 1 whatever the training, since the final-layer class-mean difference
 then always contains that token's unembedding.
 
-Real model, undefended Qwen2.5-7B-Instruct (A100, in progress): the refusal direction sits at
-layer 18; a single MLP neuron (layer 25, index 17058) pinned at 100 drops the validation
-refusal score from 4.2 to -3.0 at KL 0.03, reproducing Kazemi et al.'s single-neuron attack on
-this model. Baseline JailbreakBench refusal rate is 0.91.
+Real model, undefended Qwen2.5-7B-Instruct (A100; refusal judged by string match until
+Llama-Guard-3-8B access is granted). The refusal direction sits at layer 18, and a single MLP
+neuron (layer 25, index 17058) pinned at 100 is the strongest neuron attack.
+
+| Test set | Baseline refusal | Direction ablation | Neuron pin |
+|---|---|---|---|
+| StrongREJECT-313 | 0.82 | 0.03 | 0.14 |
+| JailbreakBench-100 | 0.91 | 0.02 | 0.17 |
+
+Direction ablation leaves 304/313 StrongREJECT prompts answered, against DSA Table V's 299/313
+unsafe for the same model, so the undefended row reproduces. Two findings from the same run
+change the plan:
+
+- **The first-token refusal score is not a faithful proxy for generated refusal.** Under direction
+  ablation it keeps 0.50 of its harmful-vs-harmless gap while generated refusal falls from 0.82 to
+  0.03. Survival, the counterfactual share and the cluster sweep are all scored on that gap, so
+  on real models they must be scored on generated refusal over validation prompts instead.
+- **Cluster directions cost far more harmless KL than random ones** (0.22 at k = 2 and 3.4 at
+  k = 8, against 0.06-0.19 for the random control), so no cluster count fits the 0.1 KL budget on
+  the undefended model. The single direction already removes refusal there, so this matters only
+  for defended models; the cluster directions should be orthogonalized against the harmless
+  activation mean before ablation.
+- The undefended model's most attributed safety neurons barely write along the direction
+  (counterfactual share 0.001-0.02 for the top 1-100), as expected with no defense installed.
 
 Reimplemented defenses (no code was released for either): DSA (`refusal_degeneracy/dsa.py`;
 training only the FFN reproduces the paper's stated 74.88% of trained parameters as 75%) and
@@ -134,6 +154,8 @@ checked against their Table V before any new number is trusted.
   converge on one refusal direction by the attacked layer, degeneracy upstream does not protect.
   The share is measured at the attacked layer, so this shows up as a high share rather than a
   wrong prediction; the paper should report the share across layers.
+- **Proxy metric**: see above; any survival number scored on the first-token gap is suspect
+  until it is rescored on generations.
 - **DSA reimplementation fidelity**: the paper leaves the refusal targets, data pairing and
   precision unstated. The undefended and DSA rows of Table V are the check.
 - **Gated models**: Llama-Guard-3-8B and Llama-3.2 need the Meta license accepted on the
