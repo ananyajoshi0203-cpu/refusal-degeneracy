@@ -62,9 +62,11 @@ def unit(vector: Tensor) -> Tensor:
 
 
 def neuron_writes(model, neurons: Sequence[tuple[int, int]]) -> Tensor:
-    """Residual-stream write vector of each ``(layer, index)`` neuron, ``[k, d_model]``."""
+    """Residual-stream write vector of each ``(layer, index)`` neuron, ``[k, d_model]``, on the
+    CPU beside the scores and directions it is compared with."""
     layers = decoder_layers(model)
-    return torch.stack([layers[layer].mlp.down_proj.weight[:, index].float() for layer, index in neurons])
+    columns = [layers[layer].mlp.down_proj.weight[:, index] for layer, index in neurons]
+    return torch.stack(columns).float().cpu()
 
 
 def direction_cosines(writes: Tensor, direction: Tensor) -> Tensor:
