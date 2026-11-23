@@ -52,11 +52,12 @@ Two refinements make this precise.
    is SOM's, with k-means).** Cluster-conditional ablation against DSA and NeuronGuard, under
    the same KL budget as the single-direction attack and with a random-direction control at
    every cluster count.
-4. **A rank-robustness curve and a defense that moves it (novel).** Refusal retained as a
-   function of the number of ablated input-conditional directions. Degenerate Safety Training
-   trains refusal to survive ablation of a growing set of the model's own cluster-conditional
-   directions, and is evaluated against single-direction, cluster, SOM and cone attacks, and an
-   adaptive attacker who knows the training clusters.
+4. **A rank bound on ablation robustness (novel).** Refusal retained as a function of the number
+   of ablated input-conditional directions. The claim: a defense's robustness is bounded by its
+   number of distinct refusal modes, and an adaptive attacker who re-estimates the directions on
+   the defended model wins once the cluster count reaches it. Degeneracy raises the rank an
+   attacker needs; it cannot remove the bound. The quantity reported per defended model is the
+   rank needed to remove refusal under the KL budget.
 
 Closest prior work, to be addressed directly: Piras et al. 2025 (SOM directions; the attack in
 3 is theirs), Wollschläger et al. 2025 (concept cones), ReFAT (Yu et al. 2025; trains against a
@@ -85,6 +86,25 @@ random Llamas, sweeping how degenerate the per-category safety neurons' writes a
   Degenerate defenses survive the single direction and fall to the cluster attack; random
   directions of the same rank leave refusal intact.
 
+Training against the attacker does not escape the bound (toy models, 3 seeds, 3 harm categories
+each refusing with its own token). Training the FFN to keep refusing while its own current global
+and cluster directions are ablated, re-estimated every 12 steps with the cluster count growing to
+6, retains this much of the refusal gap against a fresh cluster attack with k directions:
+
+| Seed | Training | k = 1 | k = 2 | k = 4 | k = 8 |
+|---|---|---|---|---|---|
+| 0 | plain refusal | 0.28 | 0.14 | -0.02 | -0.01 |
+| 0 | against own subspace | 0.83 | 0.58 | 0.03 | 0.01 |
+| 1 | plain refusal | 0.23 | 0.11 | 0.01 | 0.00 |
+| 1 | against own subspace | 0.11 | -0.04 | -0.02 | 0.02 |
+| 2 | plain refusal | 0.17 | 0.17 | -0.17 | -0.10 |
+| 2 | against own subspace | 0.41 | 0.14 | -0.04 | -0.02 |
+
+It can raise robustness at k below the number of refusal modes (two seeds of three), and
+nothing survives once k reaches it. With a single refusal token for every harmful prompt,
+refusal is removed at k = 1 whatever the training, since the final-layer class-mean difference
+then always contains that token's unembedding.
+
 Real model, undefended Qwen2.5-7B-Instruct (A100, in progress): the refusal direction sits at
 layer 18; a single MLP neuron (layer 25, index 17058) pinned at 100 drops the validation
 refusal score from 4.2 to -3.0 at KL 0.03, reproducing Kazemi et al.'s single-neuron attack on
@@ -98,8 +118,8 @@ NeuronGuard (`refusal_degeneracy/neuronguard.py`).
 
 | Model | Defense | Attacks | Measures |
 |---|---|---|---|
-| Qwen2.5-7B-Instruct | none, DSA, NeuronGuard, DST | single neuron, single direction, cluster (k = 2-16), random control | ASR (Llama-Guard-3-8B, StrongREJECT-313, JBB-100), counterfactual share, rank-robustness curve, KL |
-| LLaMA-3.2-3B-Instruct | none, DSA, DST | same | same |
+| Qwen2.5-7B-Instruct | none, DSA, NeuronGuard | single neuron, single direction, cluster (k = 2-16), random control | ASR (Llama-Guard-3-8B, StrongREJECT-313, JBB-100), counterfactual share, rank needed under the KL budget, KL |
+| LLaMA-3.2-3B-Instruct | none, DSA | same | same |
 | LLaMA-3.1-8B-Instruct | none, NeuronGuard | same | same, for a third point on the predictor |
 
 The predictor claim needs more than two defended models to be credible: score every
