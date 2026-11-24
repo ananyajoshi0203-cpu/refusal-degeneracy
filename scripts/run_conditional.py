@@ -29,19 +29,17 @@ from refusal_degeneracy.directions import (
     kl_div,
     kmeans,
     last_logits,
-    refusal_score,
     refusal_token_ids,
 )
-from refusal_degeneracy.hooks import HookPair, multi_direction_ablation
+from refusal_degeneracy.hooks import multi_direction_ablation
 from refusal_degeneracy.judge import refusal_rate
 from refusal_degeneracy.model import generate, load_model
 from refusal_degeneracy.runs import completed_replies, save_run
+from refusal_degeneracy.scoring import HookSpec, RefusalMetric, refusal_gap
 from refusal_degeneracy.stages import DirectionStage
 
 DEFAULT_KS = (2, 4, 8, 16)
 CONTROL_SEED = 0
-
-HookSpec = tuple[list[HookPair], list[HookPair]]
 
 
 @dataclass(frozen=True)
@@ -58,6 +56,7 @@ class ClusterAblation:
 class ConditionalReport:
     model: str
     layer: int
+    metric: RefusalMetric
     n_prompts: int
     refusal_gap: float
     sweep: list[ClusterAblation]
@@ -119,6 +118,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run", type=Path, required=True, help="output directory of run_week1.py")
     parser.add_argument("--k", type=int, nargs="+", default=list(DEFAULT_KS), help="cluster counts")
     parser.add_argument("--n", type=int, default=64, help="validation prompts per side")
+    parser.add_argument(
+        "--metric", type=RefusalMetric, choices=list(RefusalMetric), default=RefusalMetric.GENERATED
+    )
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--device", help="override the device (cuda / cpu)")
     return parser
@@ -138,21 +140,15 @@ def main() -> None:
     val_harmful, val_harmless = splits["val_harmful"][: args.n], splits["val_harmless"][: args.n]
     base_logits = last_logits(model, tokenizer, val_harmless)
 
-    def mean_score(prompts: Sequence[str], hook_spec: HookSpec | None) -> float:
-        return (
-            refusal_score(model, tokenizer, prompts, ref_ids, hook_spec, config.cache_batch_size)
-            .mean()
-            .item()
-        )
-
-    def refusal_gap(hook_spec: HookSpec | None) -> float:
-        return mean_score(val_harmful, hook_spec) - mean_score(val_harmless, hook_spec)
+    gap_of = refusal_gap(
+        args.metric, model, tokenizer, val_harmful, val_harmless, ref_ids, config.gen_batch_size
+    )
 
     def kl(hook_spec: HookSpec) -> float:
         return kl_div(base_logits, last_logits(model, tokenizer, val_harmless, hook_spec)).mean().item()
 
     gap, rows = sweep_clusters(
-        model, resid_harmful[:, stage.layer], resid_harmless[:, stage.layer], args.k, refusal_gap, kl
+        model, resid_harmful[:, stage.layer], resid_harmless[:, stage.layer], args.k, gap_of, kl
     )
     chosen = choose_k(rows, config.layer_kl_max)
     rates: dict[str, dict[str, float]] = {}
@@ -183,7 +179,9 @@ def main() -> None:
                     save_run(config.model, run_name, prompts, replies, set_name, {"k": chosen})
                 rates[set_name][intervention] = refusal_rate(replies)
 
-    report = ConditionalReport(config.model, stage.layer, len(val_harmful), gap, rows, chosen, rates)
+    report = ConditionalReport(
+        config.model, stage.layer, args.metric, len(val_harmful), gap, rows, chosen, rates
+    )
     (args.run / "conditional.json").write_text(json.dumps(asdict(report), indent=2))
     print(json.dumps(asdict(report), indent=2))
 

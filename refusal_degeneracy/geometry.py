@@ -8,6 +8,7 @@ the two a model is, to first order, before running the attack.
 """
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
@@ -157,9 +158,13 @@ def counterfactual_direction_share(
 
     Unlike the gradient ``direction_share`` this needs no linearization, so it stays right when a
     strong write saturates the final norm (where gradient x activation can even flip sign) and
-    when the neurons' writes interact. ``refusal_gap`` maps an optional hook spec to the gap."""
+    when the neurons' writes interact. ``refusal_gap`` maps an optional hook spec to the gap.
+    NaN when removing the writes entirely leaves the gap unchanged: neurons with no effect have
+    no share to apportion."""
     gap = refusal_gap(None)
     removed_entirely = gap - refusal_gap(neuron_write_ablation(model, neurons))
+    if removed_entirely == 0:
+        return math.nan
     removed_along_direction = gap - refusal_gap(neuron_write_ablation(model, neurons, direction))
     return removed_along_direction / removed_entirely
 
