@@ -2,7 +2,7 @@
 # Runs on the Colab VM, detached. Usage: run.sh <config> <results root> <stage>...
 # Stages, run in order: base (weeks 1-2, geometry and cluster ablation on the undefended model), dsa, neuronguard
 # (train the defense, then weeks 1-2 + geometry on it). Results land in <root>/<run>[-<defense>]
-# on Drive; defended weights stay on the VM disk. Progress in <root>/run.log, exit code in
+# on the VM disk with the defended weights. Progress in <root>/run.log, exit code in
 # <root>/exit_code once every stage has finished. REPO, WORK and DEFENSE_ARGS (extra flags for
 # the defense scripts) can be overridden for a smoke run off Colab.
 set -uo pipefail
