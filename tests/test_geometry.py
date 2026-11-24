@@ -3,9 +3,11 @@ import math
 import pytest
 import torch
 
+from refusal_degeneracy import geometry
 from refusal_degeneracy.eval import last_token_residuals
 from refusal_degeneracy.geometry import (
     RoutedAttribution,
+    counterfactual_direction_share,
     direction_cosines,
     neuron_writes,
     participation_ratio,
@@ -99,3 +101,27 @@ def test_set_geometry_of_implanted_neurons_reflects_their_redundancy(degeneracy,
 
     assert (geometry.counterfactual_share > 0.8) == runs_through_direction
     assert (geometry.weighted_cos2 > 0.9) == runs_through_direction
+
+
+@pytest.mark.parametrize(
+    ("drop_entirely", "drop_along_direction"), [(2.0, 1.5), (2.0, 0.0), (0.0, 0.0)],
+    ids=["mostly-along", "none-along", "no-effect"],
+)
+def test_counterfactual_share_is_the_drop_along_the_direction_over_the_whole_drop(
+    monkeypatch, tiny_model, dims, drop_entirely, drop_along_direction
+):
+    # Arrange
+    def tagged_ablation(model, neurons, direction=None):
+        return "along" if direction is not None else "entirely"
+
+    monkeypatch.setattr(geometry, "neuron_write_ablation", tagged_ablation)
+    full = 3.0
+    gaps = {None: full, "entirely": full - drop_entirely, "along": full - drop_along_direction}
+    expected = drop_along_direction / drop_entirely if drop_entirely else math.nan
+
+    # Act
+    direction = torch.ones(dims["d_model"])
+    share = counterfactual_direction_share(gaps.__getitem__, tiny_model, [(0, 1)], direction)
+
+    # Assert
+    assert share == pytest.approx(expected, nan_ok=True)
