@@ -9,12 +9,12 @@ set -uo pipefail
 config=$1
 root=$2
 shift 2
+cd "${REPO:-/content/refusal-degeneracy}"
 run=$(basename "$config" .json)
 model=$(python -c "import json; print(json.load(open('$config'))['model'])")
 base=$root/$run
 work=${WORK:-/content/work}
 defense_args=${DEFENSE_ARGS:-}
-cd "${REPO:-/content/refusal-degeneracy}"
 rm -f "$root/exit_code"
 
 attack() {  # attack <model> <results dir>
