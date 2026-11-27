@@ -7,6 +7,7 @@
 # of the chain skip every reply already generated.
 # Usage: launch.sh <config> <local splits.json> <session> <stage>...   (stages: see run.sh)
 set -euo pipefail
+export COPYFILE_DISABLE=1  # macOS tar would add ._ metadata files to every archive
 config=$1
 splits=$2
 session=$3
