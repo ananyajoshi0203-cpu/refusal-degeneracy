@@ -3,6 +3,8 @@
 # the local Hugging Face token (the Llama models and Llama Guard are gated), and start run.sh.
 # Results stay on the VM disk, since mounting Drive from the CLI hangs; run guard.sh beside it
 # to copy them off and stop the session before the units run out.
+# RESUME=<local dir guard.sh copied into> ships those results back first, so the --resume flags
+# of the chain skip every reply already generated.
 # Usage: launch.sh <config> <local splits.json> <session> <stage>...   (stages: see run.sh)
 set -euo pipefail
 config=$1
@@ -26,6 +28,11 @@ if [ -f "$hf_token" ]; then
 fi
 colab upload -s "$session" "$bundle/repo.tar.gz" /content/repo.tar.gz
 colab upload -s "$session" "$(dirname "$0")/setup.sh" /content/setup.sh
+if [ -n "${RESUME:-}" ]; then
+  tar -czf "$bundle/resume.tar.gz" --exclude run.log --exclude exit_code -C "$RESUME" .
+  colab upload -s "$session" "$bundle/resume.tar.gz" /content/resume.tar.gz
+  echo "!mkdir -p $root && tar -xzf /content/resume.tar.gz -C $root" | colab exec -s "$session" --timeout 90
+fi
 colab upload -s "$session" "$(dirname "$0")/run.sh" /content/run.sh
 echo "!bash /content/setup.sh $results" | colab exec -s "$session" --timeout 900
 echo "!bash /content/run.sh $config $root $*" | colab exec -s "$session" --timeout 90
