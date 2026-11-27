@@ -14,8 +14,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass
+from enum import Enum
 from pathlib import Path
 
 import torch
@@ -25,13 +26,14 @@ from refusal_degeneracy.activations import cache_last_token
 from refusal_degeneracy.config import ExperimentConfig
 from refusal_degeneracy.data import get_splits
 from refusal_degeneracy.directions import (
+    candidate_layers,
     conditional_directions,
     kl_div,
     kmeans,
     last_logits,
     refusal_token_ids,
 )
-from refusal_degeneracy.hooks import multi_direction_ablation
+from refusal_degeneracy.hooks import direction_ablation, multi_direction_ablation
 from refusal_degeneracy.judge import refusal_rate
 from refusal_degeneracy.model import generate, load_model
 from refusal_degeneracy.runs import completed_replies, save_run
@@ -39,6 +41,7 @@ from refusal_degeneracy.scoring import HookSpec, RefusalMetric, refusal_gap
 from refusal_degeneracy.stages import DirectionStage
 
 DEFAULT_KS = (2, 4, 8, 16)
+KL_BUDGETS = (0.1, 0.3, 1.0)
 CONTROL_SEED = 0
 
 
@@ -52,6 +55,22 @@ class ClusterAblation:
     kl_random_control: float
 
 
+class Attack(str, Enum):
+    DIRECTION = "direction"
+    CLUSTER = "cluster"
+
+
+@dataclass(frozen=True)
+class AttackPoint:
+    """One ablation's cost and effect: ``k`` directions removed at ``layer``."""
+
+    attack: Attack
+    layer: int
+    k: int
+    retained_refusal: float
+    kl: float
+
+
 @dataclass(frozen=True)
 class ConditionalReport:
     model: str
@@ -62,6 +81,8 @@ class ConditionalReport:
     sweep: list[ClusterAblation]
     chosen_k: int | None
     refusal_rates: dict[str, dict[str, float]]
+    layer_sweep: list[AttackPoint]
+    strongest_within_kl: dict[float, AttackPoint | None]
 
 
 def random_control(directions: Tensor, seed: int) -> Tensor:
@@ -104,6 +125,31 @@ def sweep_clusters(
     return gap, rows
 
 
+def sweep_layers(
+    model,
+    directions: Tensor,
+    layers: Iterable[int],
+    gap: float,
+    refusal_gap: Callable[[HookSpec | None], float],
+    kl: Callable[[HookSpec], float],
+) -> list[AttackPoint]:
+    """Single-direction ablation of each layer's difference-in-means direction, scored by the
+    share of the unablated ``gap`` it leaves and its harmless KL."""
+    points = []
+    for layer in layers:
+        attack = direction_ablation(model, directions[layer])
+        points.append(AttackPoint(Attack.DIRECTION, layer, 1, refusal_gap(attack) / gap, kl(attack)))
+    return points
+
+
+def strongest_within(points: Iterable[AttackPoint], kl_max: float) -> AttackPoint | None:
+    """The attack that leaves the least refusal among those whose harmless KL is within
+    ``kl_max``; None when none is. Over a range of budgets this traces the attacker's
+    refusal-vs-KL frontier, so no single budget decides whether a defense holds."""
+    within = [point for point in points if point.kl <= kl_max]
+    return min(within, key=lambda point: point.retained_refusal) if within else None
+
+
 def choose_k(rows: Sequence[ClusterAblation], kl_max: float) -> int | None:
     """The cluster count that removes the most refusal while keeping harmless behaviour within
     ``kl_max``; None when every count exceeds it."""
@@ -117,6 +163,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--run", type=Path, required=True, help="output directory of run_week1.py")
     parser.add_argument("--k", type=int, nargs="+", default=list(DEFAULT_KS), help="cluster counts")
+    parser.add_argument(
+        "--layers",
+        type=int,
+        nargs="+",
+        help="layers for single-direction ablation (default: every candidate)",
+    )
     parser.add_argument("--n", type=int, default=64, help="validation prompts per side")
     parser.add_argument(
         "--metric", type=RefusalMetric, choices=list(RefusalMetric), default=RefusalMetric.GENERATED
@@ -150,6 +202,12 @@ def main() -> None:
     gap, rows = sweep_clusters(
         model, resid_harmful[:, stage.layer], resid_harmless[:, stage.layer], args.k, gap_of, kl
     )
+    layers = args.layers or candidate_layers(stage.directions)
+    layer_points = sweep_layers(model, stage.directions, layers, gap, gap_of, kl)
+    cluster_points = [
+        AttackPoint(Attack.CLUSTER, stage.layer, row.k + 1, row.retained_refusal, row.kl) for row in rows
+    ]
+    strongest = {budget: strongest_within([*layer_points, *cluster_points], budget) for budget in KL_BUDGETS}
     chosen = choose_k(rows, config.layer_kl_max)
     rates: dict[str, dict[str, float]] = {}
     if chosen is not None:
@@ -180,7 +238,16 @@ def main() -> None:
                 rates[set_name][intervention] = refusal_rate(replies)
 
     report = ConditionalReport(
-        config.model, stage.layer, args.metric, len(val_harmful), gap, rows, chosen, rates
+        config.model,
+        stage.layer,
+        args.metric,
+        len(val_harmful),
+        gap,
+        rows,
+        chosen,
+        rates,
+        layer_points,
+        strongest,
     )
     (args.run / "conditional.json").write_text(json.dumps(asdict(report), indent=2))
     print(json.dumps(asdict(report), indent=2))
