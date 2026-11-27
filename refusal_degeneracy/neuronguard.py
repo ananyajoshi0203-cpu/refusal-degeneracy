@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from itertools import cycle
+from itertools import cycle, islice
 
 import torch
 import torch.nn.functional as F
@@ -35,6 +35,7 @@ class NeuronGuardConfig:
     lora_alpha: float = 64.0
     lr: float = 1e-5
     epochs: int = 10
+    batch_size: int = 16
     probe_steps: int = 300
     probe_lr: float = 0.05
     probe_weight_decay: float = 1e-3
@@ -181,10 +182,13 @@ def locate_safety_neurons(
     return safety_neurons(weights, config.fraction)
 
 
-def safety_loss(model, example: TokenizedExample, neurons: Sequence[tuple[int, int]]) -> SafetyLoss:
-    """Eqs. 3-6 on one harmful prompt and its refusal: refusal with and without the safety
-    neurons, plus ``KL(p_ablated || p)`` over the response tokens. All three are token means."""
-    batch = collate([example], model.device)
+def safety_loss(
+    model, examples: Sequence[TokenizedExample], neurons: Sequence[tuple[int, int]]
+) -> SafetyLoss:
+    """Eqs. 3-6 on harmful prompts and their refusals: refusal with and without the safety
+    neurons, plus ``KL(p_ablated || p)`` over the response tokens. All three are means over the
+    batch's response tokens."""
+    batch = collate(examples, model.device)
     response = batch["labels"][:, 1:] != IGNORE
     n_tokens = response.sum()
 
@@ -204,8 +208,8 @@ def safety_loss(model, example: TokenizedExample, neurons: Sequence[tuple[int, i
     )
 
 
-def user_loss(model, example: TokenizedExample) -> Tensor:
-    batch = collate([example], model.device)
+def user_loss(model, examples: Sequence[TokenizedExample]) -> Tensor:
+    batch = collate(examples, model.device)
     logits = model(input_ids=batch["input_ids"], attention_mask=batch["attention_mask"]).logits
     return response_nll(logits, batch["labels"]).sum() / (batch["labels"] != IGNORE).sum()
 
@@ -231,16 +235,16 @@ class StepGradient:
 def step_gradient(
     model,
     lora: LoRA,
-    user_example: TokenizedExample,
-    harmful_example: TokenizedExample,
+    user_batch: Sequence[TokenizedExample],
+    harmful_batch: Sequence[TokenizedExample],
     neurons: Sequence[tuple[int, int]],
     safe_first: bool,
 ) -> StepGradient:
     """One step of Algorithm 1: the task and safety gradients on the LoRA weights, flattened,
     and their projected combination. ``model`` must already carry ``lora``'s hooks."""
     with torch.enable_grad():
-        task = user_loss(model, user_example)
-        safety = safety_loss(model, harmful_example, neurons)
+        task = user_loss(model, user_batch)
+        safety = safety_loss(model, harmful_batch, neurons)
         user = _flatten(torch.autograd.grad(task, lora.parameters, allow_unused=True), lora.parameters)
         safe = _flatten(
             torch.autograd.grad(safety.total, lora.parameters, allow_unused=True), lora.parameters
@@ -256,9 +260,10 @@ def train_neuronguard(
     probe_benign: Sequence[Tensor],
     config: NeuronGuardConfig,
 ) -> TrainingLog:
-    """Algorithm 1 with one user and one harmful example per step (batch size is not stated)
-    and AdamW applying the projected gradient (the paper writes plain gradient descent; at its
-    LR of 1e-5 that would barely move zero-initialized LoRA weights). Merges LoRA at the end."""
+    """Algorithm 1 with ``batch_size`` user and harmful examples per step (the paper does not
+    state its batch size; ``refresh_every`` counts these steps) and AdamW applying the
+    projected gradient (the paper writes plain gradient descent; at its LR of 1e-5 that would
+    barely move zero-initialized LoRA weights). Merges LoRA at the end."""
     generator = torch.Generator().manual_seed(config.seed)
     lora = attach_lora(model, config.lora_rank, config.lora_alpha, generator)
     optimizer = torch.optim.AdamW(lora.parameters, lr=config.lr, weight_decay=0.0)
@@ -268,12 +273,15 @@ def train_neuronguard(
     step = 0
     with hooks(*lora.hook_spec()):
         for _ in range(config.epochs):
-            for index in torch.randperm(len(user), generator=generator).tolist():
+            order = torch.randperm(len(user), generator=generator).tolist()
+            for start in range(0, len(order), config.batch_size):
+                user_batch = [user[index] for index in order[start : start + config.batch_size]]
+                harmful_batch = list(islice(harmful_stream, len(user_batch)))
                 if step % config.refresh_every == 0:
                     neurons = locate_safety_neurons(model, probe_harmful, probe_benign, config)
                     log.safety_neurons.append(neurons)
                 safe_first = bool(torch.rand(1, generator=generator) < 0.5)
-                gradient = step_gradient(model, lora, user[index], next(harmful_stream), neurons, safe_first)
+                gradient = step_gradient(model, lora, user_batch, harmful_batch, neurons, safe_first)
                 _assign_gradients(gradient.combined, lora.parameters)
                 optimizer.step()
                 log.steps.append(

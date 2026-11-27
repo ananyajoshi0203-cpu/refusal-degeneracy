@@ -1,4 +1,6 @@
 import math
+from collections.abc import Sequence
+from itertools import cycle
 
 import pytest
 import torch
@@ -22,8 +24,12 @@ HARMFUL_MARKER, TASK_MARKER = 1, 2
 REFUSAL_TOKEN, TASK_ANSWER = 3, 6
 
 
-def answered(prompts: torch.Tensor, answer: int) -> list[TokenizedExample]:
-    return [TokenizedExample(torch.cat([p, torch.tensor([answer])]), len(p)) for p in prompts]
+def answered(prompts: torch.Tensor, answer: int, lengths: Sequence[int] = (1,)) -> list[TokenizedExample]:
+    """Each prompt answered with ``answer`` repeated, cycling through ``lengths``."""
+    return [
+        TokenizedExample(torch.cat([prompt, torch.full((length,), answer)]), len(prompt))
+        for prompt, length in zip(prompts, cycle(lengths))
+    ]
 
 
 @pytest.mark.parametrize(("predictive", "fraction"), [((4,), 0.1), ((0, 7), 0.2), ((2, 5, 9), 0.3)])
@@ -66,21 +72,28 @@ def test_combine_gradients_projects_only_conflicting_pairs(user, safe, safe_firs
     assert torch.allclose(combined, torch.tensor(expected))
 
 
+@pytest.mark.parametrize("response_lengths", [(1,), (1, 3)])
 @pytest.mark.parametrize("neurons", [[], [(0, 5), (1, 9), (2, 30), (3, 2)]])
-def test_safety_loss_without_safety_neurons_is_twice_the_refusal_loss(neurons):
+def test_safety_loss_without_safety_neurons_is_twice_the_refusal_loss(neurons, response_lengths):
     # Arrange
     model = toy_model(0)
-    (prompts,) = toy_prompts(model, 0, (HARMFUL_MARKER,), n=1)
-    (example,) = answered(prompts, REFUSAL_TOKEN)
+    (prompts,) = toy_prompts(model, 0, (HARMFUL_MARKER,), n=len(response_lengths))
+    examples = answered(prompts, REFUSAL_TOKEN, response_lengths)
     with hooks(*neuron_zero(model, neurons)):
-        expected_ablated = user_loss(model, example)
+        expected_ablated = user_loss(model, examples)
+    singles = [safety_loss(model, [example], neurons) for example in examples]
 
     # Act
-    loss = safety_loss(model, example, neurons)
+    loss = safety_loss(model, examples, neurons)
 
     # Assert
-    assert loss.refusal.item() == pytest.approx(user_loss(model, example).item(), rel=1e-5)
+    assert loss.refusal.item() == pytest.approx(user_loss(model, examples).item(), rel=1e-5)
     assert loss.ablated_refusal.item() == pytest.approx(expected_ablated.item(), rel=1e-5)
+    for term in ("refusal", "ablated_refusal", "consistency"):
+        weighted = zip(singles, response_lengths, strict=True)
+        total = sum(getattr(single, term).item() * length for single, length in weighted)
+        token_weighted = total / sum(response_lengths)
+        assert getattr(loss, term).item() == pytest.approx(token_weighted, rel=1e-4, abs=1e-6)
     assert (loss.consistency.item() == pytest.approx(0, abs=1e-6)) == (not neurons)
     assert loss.consistency.item() >= -1e-6
     terms = (loss.refusal, loss.ablated_refusal, loss.consistency)
@@ -118,7 +131,7 @@ def test_step_gradient_trains_all_three_safety_terms_and_projects_conflicts(safe
     # Arrange
     model = toy_model(0)
     harmful_prompts, task_prompts = toy_prompts(model, 0, (HARMFUL_MARKER, TASK_MARKER), n=1)
-    (harmful,), (task,) = answered(harmful_prompts, REFUSAL_TOKEN), answered(task_prompts, TASK_ANSWER)
+    harmful, task = answered(harmful_prompts, REFUSAL_TOKEN), answered(task_prompts, TASK_ANSWER)
     lora = attach_lora(model, rank=4, alpha=8, generator=torch.Generator().manual_seed(0))
     with torch.no_grad():
         for up in lora.up:
@@ -139,15 +152,18 @@ def test_step_gradient_trains_all_three_safety_terms_and_projects_conflicts(safe
     assert (projected @ kept).abs() < 1e-4 * projected.norm() * kept.norm()
 
 
-def test_train_neuronguard_keeps_refusal_when_its_safety_neurons_are_ablated():
+@pytest.mark.parametrize("batch_size", [1, 3])
+def test_train_neuronguard_keeps_refusal_when_its_safety_neurons_are_ablated(batch_size):
     # Arrange
     seed = 0
     model = toy_model(seed)
     harmful_prompts, task_prompts = toy_prompts(model, seed, (HARMFUL_MARKER, TASK_MARKER), n=8)
     harmful = answered(harmful_prompts, REFUSAL_TOKEN)
     user = answered(task_prompts, TASK_ANSWER)
-    config = NeuronGuardConfig(lr=3e-3, epochs=3, refresh_every=5, lora_rank=4, lora_alpha=8)
-    steps = config.epochs * len(user)
+    config = NeuronGuardConfig(
+        lr=3e-3, epochs=3, refresh_every=5, lora_rank=4, lora_alpha=8, batch_size=batch_size
+    )
+    steps = config.epochs * math.ceil(len(user) / batch_size)
     original = {name: parameter.clone() for name, parameter in model.named_parameters()}
 
     # Act
@@ -156,14 +172,14 @@ def test_train_neuronguard_keeps_refusal_when_its_safety_neurons_are_ablated():
     # Assert
     final_neurons = log.safety_neurons[-1]
     with hooks(*neuron_zero(model, final_neurons)):
-        ablated_refusal = sum(user_loss(model, example).item() for example in harmful) / len(harmful)
+        ablated_refusal = user_loss(model, harmful).item()
     assert len(log.steps) == steps
     assert len(log.safety_neurons) == math.ceil(steps / config.refresh_every)
     assert len(final_neurons) == model.config.num_hidden_layers * round(
         config.fraction * model.config.intermediate_size
     )
     assert ablated_refusal < log.steps[0].ablated_refusal / 4
-    assert sum(user_loss(model, example).item() for example in user) / len(user) < log.steps[0].user / 4
+    assert user_loss(model, user).item() < log.steps[0].user / 4
     assert not torch.equal(
         model.model.layers[0].self_attn.q_proj.weight, original["model.layers.0.self_attn.q_proj.weight"]
     )
