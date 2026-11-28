@@ -5,8 +5,9 @@
 # when the units run out Colab deletes the VM, so without this every result not yet copied is
 # lost. It also stops the session when the chain writes exit_code, so a finished run does not
 # keep billing; set KEEP=1 to leave it running. A free-tier VM can be reclaimed at any time;
-# when the session is gone the guard exits 2, and launch.sh with RESUME=<local dir> continues
-# the chain from there.
+# when the session is missing from $GONE_AFTER listings in a row the guard exits 2, and
+# launch.sh with RESUME=<local dir> continues the chain from there. One listing is not enough:
+# a failed or partial `colab sessions` call looks the same as a session that is gone.
 # Usage: guard.sh <session> <VM results root> <local dir> [reserve units] [seconds]
 set -uo pipefail
 session=$1
@@ -14,6 +15,9 @@ remote=$2
 dest=$3
 reserve=${4:-10}
 seconds=${5:-600}
+gone_after=${GONE_AFTER:-3}
+retry_seconds=${RETRY_SECONDS:-60}
+misses=0
 
 pull() {
   printf '%s\n' "!find $remote -type f \( -name '*.json' -o -name '*.csv' -o -name '*.jsonl' -o -name '*_stage.pt' -o -name run.log -o -name exit_code \)" |
@@ -33,9 +37,17 @@ stop() {
 }
 
 while true; do
-  if ! colab sessions 2>/dev/null | grep -q "^\[$session\]"; then
-    echo "$(date '+%F %T') session $session is gone; relaunch with RESUME=$dest"
-    exit 2
+  if colab sessions 2>/dev/null | grep -q "^\[$session\]"; then
+    misses=0
+  else
+    misses=$((misses + 1))
+    echo "$(date '+%F %T') session $session not listed ($misses of $gone_after)"
+    if [ "$misses" -ge "$gone_after" ]; then
+      echo "$(date '+%F %T') session $session is gone; relaunch with RESUME=$dest"
+      exit 2
+    fi
+    sleep "$retry_seconds"
+    continue
   fi
   pull
   units=$(balance)
