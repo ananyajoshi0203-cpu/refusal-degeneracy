@@ -58,11 +58,13 @@ class ClusterAblation:
 class Attack(str, Enum):
     DIRECTION = "direction"
     CLUSTER = "cluster"
+    LAYER_SPAN = "layer_span"
 
 
 @dataclass(frozen=True)
 class AttackPoint:
-    """One ablation's cost and effect: ``k`` directions removed at ``layer``."""
+    """One ablation's cost and effect: ``k`` directions removed, found at ``layer`` (for a layer
+    span, its strongest layer)."""
 
     attack: Attack
     layer: int
@@ -82,6 +84,7 @@ class ConditionalReport:
     chosen_k: int | None
     refusal_rates: dict[str, dict[str, float]]
     layer_sweep: list[AttackPoint]
+    layer_spans: list[AttackPoint]
     strongest_within_kl: dict[float, AttackPoint | None]
 
 
@@ -139,6 +142,26 @@ def sweep_layers(
     for layer in layers:
         attack = direction_ablation(model, directions[layer])
         points.append(AttackPoint(Attack.DIRECTION, layer, 1, refusal_gap(attack) / gap, kl(attack)))
+    return points
+
+
+def sweep_layer_spans(
+    model,
+    directions: Tensor,
+    layer_points: Sequence[AttackPoint],
+    gap: float,
+    refusal_gap: Callable[[HookSpec | None], float],
+    kl: Callable[[HookSpec], float],
+) -> list[AttackPoint]:
+    """Ablate the directions of the strongest single layers together, adding one layer at a time
+    in order of how much refusal its direction alone removes. Refusal that survives every single
+    direction but not their span is carried by several directions at once, which one-direction
+    ablation cannot reach."""
+    ranked = [point.layer for point in sorted(layer_points, key=lambda point: point.retained_refusal)]
+    points = []
+    for count in range(2, len(ranked) + 1):
+        attack = multi_direction_ablation(model, directions[ranked[:count]])
+        points.append(AttackPoint(Attack.LAYER_SPAN, ranked[0], count, refusal_gap(attack) / gap, kl(attack)))
     return points
 
 
@@ -204,10 +227,14 @@ def main() -> None:
     )
     layers = args.layers or candidate_layers(stage.directions)
     layer_points = sweep_layers(model, stage.directions, layers, gap, gap_of, kl)
+    span_points = sweep_layer_spans(model, stage.directions, layer_points, gap, gap_of, kl)
     cluster_points = [
         AttackPoint(Attack.CLUSTER, stage.layer, row.k + 1, row.retained_refusal, row.kl) for row in rows
     ]
-    strongest = {budget: strongest_within([*layer_points, *cluster_points], budget) for budget in KL_BUDGETS}
+    strongest = {
+        budget: strongest_within([*layer_points, *span_points, *cluster_points], budget)
+        for budget in KL_BUDGETS
+    }
     chosen = choose_k(rows, config.layer_kl_max)
     rates: dict[str, dict[str, float]] = {}
     if chosen is not None:
@@ -247,6 +274,7 @@ def main() -> None:
         chosen,
         rates,
         layer_points,
+        span_points,
         strongest,
     )
     (args.run / "conditional.json").write_text(json.dumps(asdict(report), indent=2))
