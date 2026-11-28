@@ -184,6 +184,7 @@ def train_dsa(
     general: Sequence[TokenizedExample],
     core: Iterable[tuple[int, int]],
     config: DSAConfig,
+    progress: bool = False,
 ) -> TrainingLog:
     """Eq. 13 with batch size 1 and constant LR (Appendix B). Each step pairs one refusal example
     with one general example, cycling the general set, so an epoch is one pass over ``safe``."""
@@ -195,6 +196,11 @@ def train_dsa(
     optimizer = torch.optim.AdamW(parameters, lr=config.lr, weight_decay=config.weight_decay)
     log = TrainingLog()
     general_stream = cycle(general)
+    bar = None
+    if progress:
+        from tqdm.auto import tqdm
+
+        bar = tqdm(total=config.epochs * len(safe), desc="DSA steps", mininterval=30)
     try:
         with torch.enable_grad(), hooks(*core_dropout(model, list(core), config.dropout, dropout_generator)):
             for _ in range(config.epochs):
@@ -206,7 +212,11 @@ def train_dsa(
                     (safe_loss + config.lambda_gen * general_loss).backward()
                     optimizer.step()
                     log.steps.append(StepLoss(safe=safe_loss.item(), general=general_loss.item()))
+                    if bar is not None:
+                        bar.update()
     finally:
+        if bar is not None:
+            bar.close()
         for parameter in parameters:
             parameter.requires_grad_(False)
         optimizer.zero_grad(set_to_none=True)

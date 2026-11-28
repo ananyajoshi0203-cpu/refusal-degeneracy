@@ -106,7 +106,7 @@ def main() -> None:
     core = core_neurons(scores, config.core_size)
     (args.out / "core_neurons.json").write_text(json.dumps(core))
 
-    log = train_dsa(model, safe, general, core, config)
+    log = train_dsa(model, safe, general, core, config, progress=True)
     (args.out / "training_log.json").write_text(json.dumps([asdict(step) for step in log.steps]))
     model.save_pretrained(args.out / "model", safe_serialization=True)
     tokenizer.save_pretrained(args.out / "model")
