@@ -5,8 +5,9 @@ from pathlib import Path
 import pytest
 import torch
 
+from refusal_degeneracy.directions import conditional_directions
 from refusal_degeneracy.eval import last_token_residuals
-from refusal_degeneracy.hooks import direction_ablation, hooks
+from refusal_degeneracy.hooks import direction_ablation, hooks, multi_direction_ablation
 from refusal_degeneracy.synthetic import (
     SyntheticDefense,
     implant_defense,
@@ -121,6 +122,43 @@ def test_sweep_layers_leaves_degenerate_refusal_that_it_removes_from_a_redundant
         assert all(point.kl > 0 for point in points)
         assert points[-1].retained_refusal == pytest.approx(expected)
     assert swept[0.0][-1].retained_refusal < 0.25 < swept[1.0][-1].retained_refusal
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+def test_sweep_layer_spans_breaks_together_a_degenerate_defense_no_single_direction_breaks(script, seed):
+    # Arrange
+    model = toy_model(seed)
+    *harmful, harmless = toy_prompts(model, seed, [*CATEGORY_MARKERS, HARMLESS_MARKER])
+    defended = implant_defense(model, SyntheticDefense(2, 2, 1.0, 1.0), harmful, harmless, REFUSAL_IDS)
+    harmful_ids = torch.cat(harmful)
+    last = defended.config.num_hidden_layers - 1
+    directions = conditional_directions(
+        last_token_residuals(defended, harmful_ids, None)[:, last],
+        last_token_residuals(defended, harmless, None)[:, last],
+        len(CATEGORY_MARKERS),
+    )
+
+    def gap(hook_spec) -> float:
+        return refusal_gap(defended, harmful_ids, harmless, REFUSAL_IDS, hook_spec)
+
+    def kl(hook_spec) -> float:
+        return float(len(hook_spec[0]))
+
+    singles = script.sweep_layers(defended, directions, range(len(directions)), gap(None), gap, kl)
+    ranked = sorted(singles, key=lambda point: point.retained_refusal)
+
+    # Act
+    spans = script.sweep_layer_spans(defended, directions, singles, gap(None), gap, kl)
+
+    # Assert
+    assert [point.k for point in spans] == list(range(2, len(directions) + 1))
+    assert all(point.attack is script.Attack.LAYER_SPAN and point.layer == ranked[0].layer for point in spans)
+    for point in spans:
+        span = directions[[single.layer for single in ranked[: point.k]]]
+        assert point.retained_refusal == pytest.approx(
+            gap(multi_direction_ablation(defended, span)) / gap(None)
+        )
+    assert spans[-1].retained_refusal < 0.25 < ranked[0].retained_refusal
 
 
 def test_sweep_clusters_breaks_a_degenerate_defense_that_random_directions_leave_alone(script):
